@@ -1,0 +1,158 @@
+#Variance Analysis############################################
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#    install.packages("BiocManager")
+#BiocManager::install("limma")
+
+#install.packages("pheatmap")
+
+
+#Citation Package
+library(limma)
+library(pheatmap)
+
+inputFile="protein.txt"       #Input file
+#inputFile="GSE10496_protein"
+logFCfilter=0.5              #logFC filtering threshold
+P.Val.Filter=0.05      #p-value threshold
+setwd("C:\\biowolf\\Diagnostic\\06.diff")      #Setting up a working directory
+
+#Read the input file and sort the input file
+rt=read.table(inputFile, header=T, sep="\t", check.names=F)
+rt=as.matrix(rt)
+rownames(rt)=rt[,1]
+exp=rt[,2:ncol(rt)]
+dimnames=list(rownames(exp),colnames(exp))
+data=matrix(as.numeric(as.matrix(exp)),nrow=nrow(exp),dimnames=dimnames)
+data=avereps(data)
+#data=log2(data+1)  #If the value of the input file is large, you need to take log2 of the data, delete the # sign at the top of this line
+data=data[rowMeans(data)>0,]
+
+#Read all the files in the directory ending with "sample1.txt"
+sampleName1=c()
+files=dir()
+files=grep("sample1.txt$", files, value=T)
+for(file in files){
+  rt=read.table(file, header=F, sep="\t", check.names=F)      #Read input file
+  geneNames=as.vector(rt[,1])      #Extracted Gene Name
+  uniqGene=unique(geneNames)       #Genes taken uniquely
+  sampleName1=c(sampleName1, uniqGene)
+}
+
+#Read all files ending with "sample2.txt" in the directory
+sampleName2=c()
+files=dir()
+files=grep("sample2.txt$", files, value=T)
+for(file in files){
+  rt=read.table(file, header=F, sep="\t", check.names=F)      #Read input file
+  geneNames=as.vector(rt[,1])      #Extracted Gene Name
+  uniqGene=unique(geneNames)       #Genes taken uniquely
+  sampleName2=c(sampleName2, uniqGene)
+}
+
+#Extraction of data from the experimental and control groups
+conData=data[,sampleName1]
+treatData=data[,sampleName2]
+data=cbind(conData,treatData)
+conNum=ncol(conData)
+treatNum=ncol(treatData)
+
+#Variance Analysis
+Type=c(rep("con",conNum),rep("treat",treatNum))
+design <- model.matrix(~0+factor(Type))
+colnames(design) <- c("con","treat")
+fit <- lmFit(data,design)
+cont.matrix<-makeContrasts(treat-con,levels=design)
+fit2 <- contrasts.fit(fit, cont.matrix)
+fit2 <- eBayes(fit2)
+
+allDiff=topTable(fit2,adjust='fdr',number=200000)
+colnames(allDiff)
+colnames(allDiff)[1]="log2FoldChange"
+write.csv(allDiff,file = "data02.csv")
+allDiffOut=rbind(id=colnames(allDiff),allDiff)
+write.table(allDiffOut, file="all.txt", sep="\t", quote=F, col.names=F)
+
+
+#Output corrected expressions
+outData=rbind(id=paste0(colnames(data),"_",Type),data)
+write.table(outData, file="normalize.txt", sep="\t", quote=F, col.names=F)
+
+#Output Difference Results
+diffSig=allDiff[with(allDiff, (abs(log2FoldChange)>logFCfilter & adj.P.Val <P.Val.Filter )), ]
+diffSigOut=rbind(id=colnames(diffSig),diffSig)
+write.table(diffSigOut, file="diff.txt", sep="\t", quote=F, col.names=F)
+
+
+#Output differentially expressed gene expression
+diffGeneExp=data[row.names(diffSig),]
+diffGeneExpOut=rbind(id=paste0(colnames(diffGeneExp),"_",Type), diffGeneExp)
+write.table(diffGeneExpOut, file="diffGeneExp.txt", sep="\t", quote=F, col.names=F)
+
+#Heat mapping of differentially expressed genes
+geneNum=80
+diffSig=diffSig[order(as.numeric(as.vector(diffSig$log2FoldChange))),]
+diffGeneName=as.vector(rownames(diffSig))
+diffLength=length(diffGeneName)
+hmGene=c()
+if(diffLength>(2*geneNum)){
+  hmGene=diffGeneName[c(1:geneNum,(diffLength-geneNum+1):diffLength)]
+}else{
+  hmGene=diffGeneName
+}
+hmExp=data[hmGene,]
+Type=c(rep("Con",conNum),rep("Treat",treatNum))
+names(Type)=colnames(data)
+Type=as.data.frame(Type)
+pdf(file="heatmap.pdf", width=10, height=8)
+pheatmap(hmExp, 
+         annotation=Type, 
+         color = colorRampPalette(c("blue", "white", "red"))(50),
+         cluster_cols =F,
+         show_colnames = F,
+         scale="row",
+         fontsize = 8,
+         fontsize_row=7,
+         fontsize_col=8)
+dev.off()
+##Gradient volcano map################################
+# Loading Packages：
+library(ggplot2)
+
+
+# Read data：
+data <- read.csv("data02.csv")
+row.names(data)=data[,1]
+# Add a new column to store the label information, and list the labels that need to be displayed：
+data$label <- c(rownames(data)[1:10],rep(NA,(nrow(data)-10)))
+
+ggplot(data,aes(log2FoldChange, -log10(P.Value)))+
+  # Horizontal horizontal reference line：
+  geom_hline(yintercept = -log10(0.05), linetype = "dashed", color = "#999999")+
+  # Vertical vertical reference line：
+  geom_vline(xintercept = c(-0.2,0.2), linetype = "dashed", color = "#999999")+
+  
+  # Scatter Chart:
+  geom_point(aes(size=-log10(P.Value), color= -log10(P.Value)))+
+  # Specify the color gradient mode：
+  scale_color_gradientn(values = seq(0,1,0.2),
+                        colors = c("#39489f","#39bbec","#f9ed36","#f38466","#b81f25"))+
+  # Specify the scatter size gradient mode：
+  scale_size_continuous(range = c(1,3))+
+  # Theme Adjustment：
+  theme_bw()+
+  # Adjust theme and legend positions：
+  theme(panel.grid = element_blank(),
+        legend.position = c(0.8,0.95),
+        legend.justification = c(0,1))+
+  # Set some legends not to be displayed：
+  guides(col = guide_colourbar(title = "-Log10 p value"),
+         size = "none")+
+  # Add Tags：
+  geom_text(aes(label=label, color = -log10(P.Value)), size = 3, vjust = 1.5, hjust=1)+
+  # Modify axes：
+  xlab("Log2FoldChange")+
+  ylab("-Log10 (P.Value)")+
+  theme(legend.position = "bottom")
+
+# Save image：
+ggsave("GSE10946vocanol_plot.pdf", height = 9, width = 14)
